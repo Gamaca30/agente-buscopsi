@@ -9,7 +9,6 @@ app = Flask(__name__)
 CORS(app)
 
 # Clave OpenAI desde variable de entorno
-openai.api_key = os.getenv("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")
 
 API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 API_VERIFICADOS = "https://buscopsi.mx/wp-json/buscopsi/v1/verificados"
