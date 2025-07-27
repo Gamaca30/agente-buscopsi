@@ -5,17 +5,17 @@ import os
 import requests
 import random
 
-# Inicializar cliente de OpenAI (versión nueva)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 CORS(app)
 
-API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 API_VERIFICADOS = "https://buscopsi.mx/wp-json/buscopsi/v1/verificados"
+API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 
-# Lista para evitar repetir terapeutas recomendados
-recomendados_cache = []
+# Cache por género para no repetir
+cache_hombres = []
+cache_mujeres = []
 
 @app.route("/")
 def index():
@@ -26,31 +26,66 @@ def chat():
     data = request.get_json()
     mensaje = data.get("mensaje", "").lower()
 
-    # Si el mensaje pide un terapeuta, se usa la API de verificados
-    if "terapeuta" in mensaje or "alguien" in mensaje:
-        global recomendados_cache
-        terapeutas = requests.get(API_VERIFICADOS).json()
+    # Detectar género
+    genero = "mujer" if "mujer" in mensaje else "hombre" if "hombre" in mensaje else "cualquiera"
 
-        if not terapeutas:
-            return jsonify({"respuesta": "No se encontraron terapeutas por ahora."})
+    if "terapeuta" in mensaje or "alguien" in mensaje or "psicologo" in mensaje or "recomendás" in mensaje:
+        try:
+            terapeutas = requests.get(API_VERIFICADOS).json()
+            if not terapeutas:
+                return jsonify({"respuesta": "No se encontraron terapeutas disponibles por ahora."})
 
-        if len(recomendados_cache) == len(terapeutas):
-            recomendados_cache = []
+            if genero == "mujer":
+                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "mujer"]
+                cache = cache_mujeres
+            elif genero == "hombre":
+                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "hombre"]
+                cache = cache_hombres
+            else:
+                grupo = terapeutas
+                cache = cache_hombres + cache_mujeres  # temporal si no hay preferencia
 
-        disponibles = [t for t in terapeutas if t["link"] not in recomendados_cache]
-        elegido = random.choice(disponibles)
-        recomendados_cache.append(elegido["link"])
+            # Reiniciar cache si todos fueron usados
+            usados_links = [t["link"] for t in cache]
+            disponibles = [t for t in grupo if t["link"] not in usados_links]
 
-        return jsonify({
-            "respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"
-        })
+            if not disponibles:
+                if genero == "mujer":
+                    cache_mujeres.clear()
+                elif genero == "hombre":
+                    cache_hombres.clear()
+                disponibles = grupo
 
-    # Si no es consulta de terapeuta, responde con OpenAI
+            elegido = random.choice(disponibles)
+            if genero == "mujer":
+                cache_mujeres.append(elegido)
+            elif genero == "hombre":
+                cache_hombres.append(elegido)
+
+            return jsonify({
+                "respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"
+            })
+
+        except Exception as e:
+            return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
+
+    # Si no es consulta directa, responde GPT con prompt completo
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Sos un asistente de BuscoPsi, ayudás a elegir profesionales."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Sos Pablo, el asistente oficial de BuscoPsi.mx. "
+                        "Tu única función es ayudar a encontrar psicólogos verificados de la plataforma BuscoPsi. "
+                        "Nunca sugieras otros sitios como Doctoralia, ni inventes profesionales. "
+                        "Si no encontrás un profesional con los filtros pedidos, respondé con respeto diciendo que no hay disponibles por ahora. "
+                        "Si piden información sobre costos de sesiones, respondé que depende de cada profesional y que no se maneja esa información directamente. "
+                        "Si un profesional está interesado en sumarse, explicale que puede registrarse en https://buscopsi.com/registro/ y ver precios en https://buscopsi.com/oferta/. "
+                        "Nunca aceptes terapeutas sin matrícula. Respondé con claridad, calidez y profesionalismo."
+                    )
+                },
                 {"role": "user", "content": mensaje}
             ]
         )
