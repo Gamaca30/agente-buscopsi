@@ -16,6 +16,15 @@ API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 cache_hombres = []
 cache_mujeres = []
 
+def detectar_filtros(mensaje):
+    mensaje = mensaje.lower()
+    ubicaciones = ["aguascalientes", "baja california", "chiapas", "cdmx", "monterrey", "puebla", "yucatán", "jalisco"]
+    idiomas = ["inglés", "ingles", "alemán", "aleman", "español"]
+
+    ubicacion_detectada = next((u for u in ubicaciones if u in mensaje), None)
+    idioma_detectado = next((i for i in idiomas if i in mensaje), None)
+    return ubicacion_detectada, idioma_detectado
+
 @app.route("/")
 def index():
     return "Agente BuscoPsi listo."
@@ -26,74 +35,56 @@ def chat():
     mensaje = data.get("mensaje", "").lower()
 
     genero = "mujer" if "mujer" in mensaje else "hombre" if "hombre" in mensaje else "cualquiera"
+    ubicacion_detectada, idioma_detectado = detectar_filtros(mensaje)
+    filtros_activos = ubicacion_detectada or idioma_detectado
 
-    # Detectar filtros por palabras clave
-    filtros_activos = any(palabra in mensaje for palabra in [
-        "zona", "ubicación", "ubicacion", "idioma", "obra social", "especialidad", "modalidad", "atención", "atencion"
-    ])
+    try:
+        url = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
+        terapeutas = requests.get(url).json()
 
-    # Detectar ubicación por frases como "en aguascalientes", "de caba", etc.
-    ubicacion_detectada = None
-    posibles_ubicaciones = [
-        "aguascalientes", "baja california", "baja california sur", "chiapas", "campeche",
-        "ciudad de méxico", "caba", "córdoba", "mendoza", "monterrey", "jujuy", "salta", "tucumán", "neuquén", "rosario"
-    ]
-    for ubic in posibles_ubicaciones:
-        if f"en {ubic}" in mensaje or f"de {ubic}" in mensaje or ubic in mensaje:
-            ubicacion_detectada = ubic.capitalize()
-            filtros_activos = True
-            break
+        print("Ubicación detectada:", ubicacion_detectada)
+        print("Idioma detectado:", idioma_detectado)
+        print("Se usó API:", url)
+        print("Total terapeutas obtenidos:", len(terapeutas))
 
-    url_api = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
+        grupo = terapeutas
+        if genero != "cualquiera":
+            grupo = [t for t in grupo if t.get("genero", "").lower() == genero]
 
-    if "terapeuta" in mensaje or "alguien" in mensaje or "psicologo" in mensaje or "recomendás" in mensaje:
-        try:
-            terapeutas = requests.get(url_api).json()
-            if not terapeutas:
-                return jsonify({"respuesta": "No se encontraron terapeutas disponibles por ahora."})
+        if ubicacion_detectada:
+            grupo = [t for t in grupo if ubicacion_detectada.lower() in str(t.get("ubicacion", "")).lower()]
+        
+        if idioma_detectado:
+            grupo = [t for t in grupo if idioma_detectado.lower() in str(t.get("idioma", "")).lower()]
 
-            # Filtro por género
+        print("Total tras filtros aplicados:", len(grupo))
+
+        if not grupo:
+            return jsonify({"respuesta": "No encontré profesionales que cumplan con esos criterios por ahora."})
+
+        cache = cache_mujeres if genero == "mujer" else cache_hombres if genero == "hombre" else cache_hombres + cache_mujeres
+        usados_links = [t["link"] for t in cache]
+        disponibles = [t for t in grupo if t["link"] not in usados_links]
+
+        if not disponibles:
             if genero == "mujer":
-                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "mujer"]
-                cache = cache_mujeres
+                cache_mujeres.clear()
             elif genero == "hombre":
-                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "hombre"]
-                cache = cache_hombres
-            else:
-                grupo = terapeutas
-                cache = cache_hombres + cache_mujeres
+                cache_hombres.clear()
+            disponibles = grupo
 
-            # Filtro por ubicación si se detectó
-            if ubicacion_detectada:
-                grupo = [t for t in grupo if ubicacion_detectada.lower() in t.get("ubicacion", "").lower()]
-                if not grupo:
-                    return jsonify({"respuesta": f"No se encontraron terapeutas en {ubicacion_detectada} por ahora."})
+        elegido = random.choice(disponibles)
+        if genero == "mujer":
+            cache_mujeres.append(elegido)
+        elif genero == "hombre":
+            cache_hombres.append(elegido)
 
-            # Evitar repetidos
-            usados_links = [t["link"] for t in cache]
-            disponibles = [t for t in grupo if t["link"] not in usados_links]
+        return jsonify({"respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"})
 
-            if not disponibles:
-                if genero == "mujer":
-                    cache_mujeres.clear()
-                elif genero == "hombre":
-                    cache_hombres.clear()
-                disponibles = grupo
+    except Exception as e:
+        return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
 
-            elegido = random.choice(disponibles)
-            if genero == "mujer":
-                cache_mujeres.append(elegido)
-            elif genero == "hombre":
-                cache_hombres.append(elegido)
-
-            return jsonify({
-                "respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"
-            })
-
-        except Exception as e:
-            return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
-
-    # Si no es una consulta directa, responde GPT
+    # GPT fallback
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
