@@ -16,15 +16,6 @@ API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 cache_hombres = []
 cache_mujeres = []
 
-def detectar_filtros(mensaje):
-    mensaje = mensaje.lower()
-    ubicaciones = ["aguascalientes", "baja california", "chiapas", "cdmx", "monterrey", "puebla", "yucatán", "jalisco"]
-    idiomas = ["inglés", "ingles", "alemán", "aleman", "español"]
-
-    ubicacion_detectada = next((u for u in ubicaciones if u in mensaje), None)
-    idioma_detectado = next((i for i in idiomas if i in mensaje), None)
-    return ubicacion_detectada, idioma_detectado
-
 @app.route("/")
 def index():
     return "Agente BuscoPsi listo."
@@ -35,54 +26,80 @@ def chat():
     mensaje = data.get("mensaje", "").lower()
 
     genero = "mujer" if "mujer" in mensaje else "hombre" if "hombre" in mensaje else "cualquiera"
-    ubicacion_detectada, idioma_detectado = detectar_filtros(mensaje)
-    filtros_activos = ubicacion_detectada or idioma_detectado
 
-    try:
-        url = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
-        terapeutas = requests.get(url).json()
+    # Palabras clave para detectar filtros
+    zonas = ["aguascalientes", "baja california", "chiapas", "caba", "cdmx", "monterrey"]
+    idiomas = ["español", "ingles", "inglés", "aleman", "alemán"]
+    modalidades = ["online", "presencial", "a domicilio"]
+    especialidades = ["ansiedad", "duelo", "tea", "tgd", "adicciones", "abuso", "depresion"]
+    obras_sociales = ["osde", "swiss medical", "galeno", "omint", "pami"]
 
-        print("Ubicación detectada:", ubicacion_detectada)
-        print("Idioma detectado:", idioma_detectado)
-        print("Se usó API:", url)
-        print("Total terapeutas obtenidos:", len(terapeutas))
+    ubicacion_detectada = next((z for z in zonas if z in mensaje), None)
+    idioma_detectado = next((i for i in idiomas if i in mensaje), None)
+    modalidad_detectada = next((m for m in modalidades if m in mensaje), None)
+    especialidad_detectada = next((e for e in especialidades if e in mensaje), None)
+    obra_social_detectada = next((o for o in obras_sociales if o in mensaje), None)
 
-        grupo = terapeutas
-        if genero != "cualquiera":
-            grupo = [t for t in grupo if t.get("genero", "").lower() == genero]
+    filtros_activos = any([ubicacion_detectada, idioma_detectado, modalidad_detectada, especialidad_detectada, obra_social_detectada])
+    url_api = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
 
-        if ubicacion_detectada:
-            grupo = [t for t in grupo if ubicacion_detectada.lower() in str(t.get("ubicacion", "")).lower()]
-        
-        if idioma_detectado:
-            grupo = [t for t in grupo if idioma_detectado.lower() in str(t.get("idioma", "")).lower()]
+    print("Usando API:", url_api)
+    print("Ubicación:", ubicacion_detectada)
+    print("Idioma:", idioma_detectado)
+    print("Modalidad:", modalidad_detectada)
+    print("Especialidad:", especialidad_detectada)
+    print("Obra social:", obra_social_detectada)
 
-        print("Total tras filtros aplicados:", len(grupo))
+    if "terapeuta" in mensaje or "alguien" in mensaje or "psicologo" in mensaje or "recomendás" in mensaje:
+        try:
+            terapeutas = requests.get(url_api).json()
+            if not terapeutas:
+                return jsonify({"respuesta": "No se encontraron terapeutas disponibles por ahora."})
 
-        if not grupo:
-            return jsonify({"respuesta": "No encontré profesionales que cumplan con esos criterios por ahora."})
-
-        cache = cache_mujeres if genero == "mujer" else cache_hombres if genero == "hombre" else cache_hombres + cache_mujeres
-        usados_links = [t["link"] for t in cache]
-        disponibles = [t for t in grupo if t["link"] not in usados_links]
-
-        if not disponibles:
+            # Filtro por género
             if genero == "mujer":
-                cache_mujeres.clear()
+                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "mujer"]
+                cache = cache_mujeres
             elif genero == "hombre":
-                cache_hombres.clear()
-            disponibles = grupo
+                grupo = [t for t in terapeutas if t.get("genero", "").lower() == "hombre"]
+                cache = cache_hombres
+            else:
+                grupo = terapeutas
+                cache = cache_hombres + cache_mujeres
 
-        elegido = random.choice(disponibles)
-        if genero == "mujer":
-            cache_mujeres.append(elegido)
-        elif genero == "hombre":
-            cache_hombres.append(elegido)
+            # Filtros adicionales
+            if ubicacion_detectada:
+                grupo = [t for t in grupo if ubicacion_detectada in str(t.get("ubicacion", "")).lower()]
+            if idioma_detectado:
+                grupo = [t for t in grupo if idioma_detectado in str(t.get("idioma", "")).lower()]
+            if modalidad_detectada:
+                grupo = [t for t in grupo if modalidad_detectada in str(t.get("modalidad", "")).lower()]
+            if especialidad_detectada:
+                grupo = [t for t in grupo if especialidad_detectada in str(t.get("especialidad", "")).lower()]
+            if obra_social_detectada:
+                grupo = [t for t in grupo if obra_social_detectada in str(t.get("obra_social", "")).lower()]
 
-        return jsonify({"respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"})
+            print("Terapeutas después de filtros:", len(grupo))
 
-    except Exception as e:
-        return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
+            if not grupo:
+                return jsonify({"respuesta": "No se encontraron terapeutas con esas características por ahora."})
+
+            usados_links = [t["link"] for t in cache]
+            disponibles = [t for t in grupo if t["link"] not in usados_links]
+
+            if not disponibles:
+                cache.clear()
+                disponibles = grupo
+
+            elegido = random.choice(disponibles)
+            cache.append(elegido)
+
+            return jsonify({
+                "respuesta": f"Te recomiendo a {elegido['nombre']}: {elegido['link']}"
+            })
+
+        except Exception as e:
+            return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
 
     # GPT fallback
     try:
