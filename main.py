@@ -13,7 +13,6 @@ CORS(app)
 API_VERIFICADOS = "https://buscopsi.mx/wp-json/buscopsi/v1/verificados"
 API_TERAPEUTAS = "https://buscopsi.mx/wp-json/buscopsi/v1/terapeutas"
 
-# Cache por género para no repetir
 cache_hombres = []
 cache_mujeres = []
 
@@ -26,12 +25,18 @@ def chat():
     data = request.get_json()
     mensaje = data.get("mensaje", "").lower()
 
-    # Detectar género
     genero = "mujer" if "mujer" in mensaje else "hombre" if "hombre" in mensaje else "cualquiera"
+
+    # Detectar si el usuario pidió filtros específicos
+    filtros_activos = any(palabra in mensaje for palabra in [
+        "zona", "ubicación", "ubicacion", "idioma", "obra social", "especialidad", "modalidad", "atención", "atencion"
+    ])
+
+    url_api = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
 
     if "terapeuta" in mensaje or "alguien" in mensaje or "psicologo" in mensaje or "recomendás" in mensaje:
         try:
-            terapeutas = requests.get(API_VERIFICADOS).json()
+            terapeutas = requests.get(url_api).json()
             if not terapeutas:
                 return jsonify({"respuesta": "No se encontraron terapeutas disponibles por ahora."})
 
@@ -43,9 +48,8 @@ def chat():
                 cache = cache_hombres
             else:
                 grupo = terapeutas
-                cache = cache_hombres + cache_mujeres  # temporal si no hay preferencia
+                cache = cache_hombres + cache_mujeres
 
-            # Reiniciar cache si todos fueron usados
             usados_links = [t["link"] for t in cache]
             disponibles = [t for t in grupo if t["link"] not in usados_links]
 
@@ -69,10 +73,10 @@ def chat():
         except Exception as e:
             return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
 
-    # Si no es consulta directa, responde GPT con prompt completo
+    # Si no es consulta directa, responde GPT
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
