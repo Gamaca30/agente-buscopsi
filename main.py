@@ -27,10 +27,22 @@ def chat():
 
     genero = "mujer" if "mujer" in mensaje else "hombre" if "hombre" in mensaje else "cualquiera"
 
-    # Detectar si el usuario pidió filtros específicos
+    # Detectar filtros por palabras clave
     filtros_activos = any(palabra in mensaje for palabra in [
         "zona", "ubicación", "ubicacion", "idioma", "obra social", "especialidad", "modalidad", "atención", "atencion"
     ])
+
+    # Detectar ubicación por frases como "en aguascalientes", "de caba", etc.
+    ubicacion_detectada = None
+    posibles_ubicaciones = [
+        "aguascalientes", "baja california", "baja california sur", "chiapas", "campeche",
+        "ciudad de méxico", "caba", "córdoba", "mendoza", "monterrey", "jujuy", "salta", "tucumán", "neuquén", "rosario"
+    ]
+    for ubic in posibles_ubicaciones:
+        if f"en {ubic}" in mensaje or f"de {ubic}" in mensaje or ubic in mensaje:
+            ubicacion_detectada = ubic.capitalize()
+            filtros_activos = True
+            break
 
     url_api = API_TERAPEUTAS if filtros_activos else API_VERIFICADOS
 
@@ -40,6 +52,7 @@ def chat():
             if not terapeutas:
                 return jsonify({"respuesta": "No se encontraron terapeutas disponibles por ahora."})
 
+            # Filtro por género
             if genero == "mujer":
                 grupo = [t for t in terapeutas if t.get("genero", "").lower() == "mujer"]
                 cache = cache_mujeres
@@ -50,6 +63,13 @@ def chat():
                 grupo = terapeutas
                 cache = cache_hombres + cache_mujeres
 
+            # Filtro por ubicación si se detectó
+            if ubicacion_detectada:
+                grupo = [t for t in grupo if ubicacion_detectada.lower() in t.get("ubicacion", "").lower()]
+                if not grupo:
+                    return jsonify({"respuesta": f"No se encontraron terapeutas en {ubicacion_detectada} por ahora."})
+
+            # Evitar repetidos
             usados_links = [t["link"] for t in cache]
             disponibles = [t for t in grupo if t["link"] not in usados_links]
 
@@ -73,7 +93,7 @@ def chat():
         except Exception as e:
             return jsonify({"respuesta": f"Ups, hubo un error al buscar un profesional. ({str(e)})"})
 
-    # Si no es consulta directa, responde GPT
+    # Si no es una consulta directa, responde GPT
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
